@@ -1,3 +1,4 @@
+import { sendSystemMessageToSession } from "../gateway/server-methods/system-message.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -195,6 +196,7 @@ export async function runWithModelFallback<T>(params: {
   provider: string;
   model: string;
   agentDir?: string;
+  sessionKey?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
   run: (provider: string, model: string) => Promise<T>;
@@ -241,11 +243,24 @@ export async function runWithModelFallback<T>(params: {
           error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
           reason: "rate_limit",
         });
+        const nextCandidate = candidates[i + 1];
+        if (nextCandidate) {
+          sendSystemMessageToSession(
+            params.sessionKey,
+            `SYSTEM: Model failover. Switched to ${nextCandidate.provider}/${nextCandidate.model}.`,
+          );
+        }
         continue;
       }
     }
     try {
       const result = await params.run(candidate.provider, candidate.model);
+      if (i > 0) {
+        sendSystemMessageToSession(
+          params.sessionKey,
+          `SYSTEM: Primary model restored: ${candidate.provider}/${candidate.model}.`,
+        );
+      }
       return {
         result,
         provider: candidate.provider,
@@ -260,6 +275,14 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         }) ?? err;
       if (!isFailoverError(normalized)) throw err;
+
+      const nextCandidate = candidates[i + 1];
+      if (nextCandidate) {
+        sendSystemMessageToSession(
+          params.sessionKey,
+          `SYSTEM: Model failover. Switched to ${nextCandidate.provider}/${nextCandidate.model}.`,
+        );
+      }
 
       lastError = normalized;
       const described = describeFailoverError(normalized);
